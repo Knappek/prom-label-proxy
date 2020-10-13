@@ -31,12 +31,14 @@ func main() {
 		insecureListenAddress string
 		upstream              string
 		label                 string
+		opaHTTPAuthzEndpoint                string
 	)
 
 	flagset := flag.NewFlagSet(os.Args[0], flag.ExitOnError)
 	flagset.StringVar(&insecureListenAddress, "insecure-listen-address", "", "The address the prom-label-proxy HTTP server should listen on.")
 	flagset.StringVar(&upstream, "upstream", "", "The upstream URL to proxy to.")
 	flagset.StringVar(&label, "label", "", "The label to enforce in all proxied PromQL queries.")
+	flagset.StringVar(&opaHTTPAuthzEndpoint, "opa-http-authz-endpoint", "http://127.0.0.1:8181/v1/data/httpapi/authz", "The url to OPA.")
 	//nolint: errcheck // Parse() will exit on error.
 	flagset.Parse(os.Args[1:])
 	if label == "" {
@@ -52,7 +54,7 @@ func main() {
 		log.Fatalf("Invalid scheme for upstream URL %q, only 'http' and 'https' are supported", upstream)
 	}
 
-	routes := injectproxy.NewRoutes(upstreamURL, label)
+	routes := injectproxy.NewRoutes(upstreamURL, label, opaHTTPAuthzEndpoint)
 	mux := http.NewServeMux()
 	mux.Handle("/", routes)
 

@@ -30,20 +30,22 @@ import (
 )
 
 type routes struct {
-	upstream  *url.URL
-	handler   http.Handler
-	label     string
-	mux       *http.ServeMux
-	modifiers map[string]func(*http.Response) error
+	upstream             *url.URL
+	handler              http.Handler
+	label                string
+	mux                  *http.ServeMux
+	modifiers            map[string]func(*http.Response) error
+	opaHTTPAuthzEndpoint string
 }
 
-func NewRoutes(upstream *url.URL, label string) *routes {
+func NewRoutes(upstream *url.URL, label string, opaHTTPAuthzEndpoint string) *routes {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 
 	r := &routes{
-		upstream: upstream,
-		handler:  proxy,
-		label:    label,
+		upstream:             upstream,
+		handler:              proxy,
+		label:                label,
+		opaHTTPAuthzEndpoint: opaHTTPAuthzEndpoint,
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/federate", enforceMethods(r.federate, "GET"))
@@ -109,16 +111,8 @@ type opaPayload struct {
 }
 
 type opaResponse struct {
-	DecisionID string `json:"decision_id"`
-	Result     struct {
-		AdminUsers []string `json:"admin_users"`
-		Allow      bool     `json:"allow"`
-		Claims     struct {
-			Name     string   `json:"name"`
-			Roles    []string `json:"roles"`
-			Username string   `json:"username"`
-		} `json:"claims"`
-		GroupUsers []string `json:"group_users"`
+	Result struct {
+		Allow bool `json:"allow"`
 	} `json:"result"`
 }
 
@@ -139,8 +133,8 @@ func (r *routes) isUserAuthorized(req *http.Request, val string) (int, string, e
 		errorString = fmt.Sprintf("%v %v - failed to marshal OPA payload", http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return http.StatusInternalServerError, errorString, err
 	}
-	opaUrl := "http://127.0.0.1:8181/v1/data/httpapi/authz"
-	opaReq, err := http.NewRequest("POST", opaUrl, bytes.NewBuffer(payload))
+	opaHTTPAuthzEndpoint := r.opaHTTPAuthzEndpoint
+	opaReq, err := http.NewRequest("POST", opaHTTPAuthzEndpoint, bytes.NewBuffer(payload))
 	if err != nil {
 		errorString = fmt.Sprintf("%v %v - failed to create OPA HTTP request", http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return http.StatusInternalServerError, errorString, err
