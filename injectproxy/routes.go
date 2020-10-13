@@ -14,14 +14,19 @@
 package injectproxy
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
+	"unicode"
 
 	"github.com/prometheus/prometheus/pkg/labels"
 	"github.com/prometheus/prometheus/promql/parser"
+	"gopkg.in/square/go-jose.v2/json"
 )
 
 type routes struct {
@@ -59,11 +64,32 @@ func NewRoutes(upstream *url.URL, label string) *routes {
 }
 
 func (r *routes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	lvalue := req.URL.Query().Get(r.label)
+	queryString := req.URL.Query().Get("query")
+	f := func(c rune) bool {
+		return !unicode.IsLetter(c) && !unicode.IsNumber(c)
+	}
+	querySlice := strings.FieldsFunc(queryString, f)
+	index := 0
+	for i := range querySlice {
+		if querySlice[i] == r.label {
+			index = i + 1
+			break
+		}
+	}
+	lvalue := querySlice[index]
+	// lvalue := req.URL.Query().Get(r.label)
 	if lvalue == "" {
 		http.Error(w, fmt.Sprintf("Bad request. The %q query parameter must be provided.", r.label), http.StatusBadRequest)
 		return
 	}
+
+	// authorize request with opa
+	httpStatus, httpStatusText, err := r.isUserAuthorized(req, lvalue)
+	if httpStatus != http.StatusOK {
+		http.Error(w, fmt.Sprintf("%v: %v", httpStatusText, err), httpStatus)
+		return
+	}
+
 	req = req.WithContext(withLabelValue(req.Context(), lvalue))
 	// Remove the proxy label from the query parameters.
 	q := req.URL.Query()
@@ -71,6 +97,74 @@ func (r *routes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	req.URL.RawQuery = q.Encode()
 
 	r.mux.ServeHTTP(w, req)
+}
+
+type opaPayload struct {
+	Input struct {
+		HTTP struct {
+			Headers map[string]string `json:"headers"`
+		} `json:"http"`
+		Label map[string]string `json:"label"`
+	} `json:"input"`
+}
+
+type opaResponse struct {
+	DecisionID string `json:"decision_id"`
+	Result     struct {
+		AdminUsers []string `json:"admin_users"`
+		Allow      bool     `json:"allow"`
+		Claims     struct {
+			Name     string   `json:"name"`
+			Roles    []string `json:"roles"`
+			Username string   `json:"username"`
+		} `json:"claims"`
+		GroupUsers []string `json:"group_users"`
+	} `json:"result"`
+}
+
+func (r *routes) isUserAuthorized(req *http.Request, val string) (int, string, error) {
+	var opaPayload opaPayload
+
+	bearerToken := req.Header.Get("Authorization")
+	label := make(map[string]string)
+	label[r.label] = val
+	headers := make(map[string]string)
+	headers["authorization"] = "Bearer " + bearerToken
+	opaPayload.Input.HTTP.Headers = headers
+	opaPayload.Input.Label = label
+
+	payload, err := json.Marshal(opaPayload)
+	if err != nil {
+		return http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError), err
+	}
+	url := "http://127.0.0.1:8181/v1/data/httpapi/authz"
+	opaReq, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
+	if err != nil {
+		return http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError), err
+	}
+	client := &http.Client{}
+	resp, err := client.Do(opaReq)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError), err
+	}
+
+	opaResponse := &opaResponse{}
+	err = json.Unmarshal(body, opaResponse)
+	if err != nil {
+		return http.StatusInternalServerError, "(" + http.StatusText(http.StatusInternalServerError) + ") failed to unmarshal to OPA response struct", err
+	}
+
+	if opaResponse.Result.Allow {
+		return http.StatusOK, http.StatusText(http.StatusOK), nil
+	}
+
+	return http.StatusForbidden, "(" + http.StatusText(http.StatusForbidden) + ") User not authorized.", nil
 }
 
 func (r *routes) ModifyResponse(resp *http.Response) error {
@@ -106,6 +200,7 @@ func mustLabelValue(ctx context.Context) string {
 	if label == "" {
 		panic(fmt.Sprintf("empty %q value in the context", keyLabel))
 	}
+
 	return label
 }
 

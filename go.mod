@@ -8,4 +8,5 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/alertmanager v0.20.0
 	github.com/prometheus/prometheus v1.8.2-0.20200507164740-ecee9c8abfd1
+	gopkg.in/square/go-jose.v2 v2.5.1
 )
