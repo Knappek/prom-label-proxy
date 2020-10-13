@@ -124,6 +124,7 @@ type opaResponse struct {
 
 func (r *routes) isUserAuthorized(req *http.Request, val string) (int, string, error) {
 	var opaPayload opaPayload
+	var errorString string
 
 	bearerToken := req.Header.Get("Authorization")
 	label := make(map[string]string)
@@ -135,36 +136,42 @@ func (r *routes) isUserAuthorized(req *http.Request, val string) (int, string, e
 
 	payload, err := json.Marshal(opaPayload)
 	if err != nil {
-		return http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError), err
+		errorString = fmt.Sprintf("%v %v - failed to marshal OPA payload", http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+		return http.StatusInternalServerError, errorString, err
 	}
-	url := "http://127.0.0.1:8181/v1/data/httpapi/authz"
-	opaReq, err := http.NewRequest("POST", url, bytes.NewBuffer(payload))
+	opaUrl := "http://127.0.0.1:8181/v1/data/httpapi/authz"
+	opaReq, err := http.NewRequest("POST", opaUrl, bytes.NewBuffer(payload))
 	if err != nil {
-		return http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError), err
+		errorString = fmt.Sprintf("%v %v - failed to create OPA HTTP request", http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+		return http.StatusInternalServerError, errorString, err
 	}
 	client := &http.Client{}
 	resp, err := client.Do(opaReq)
 	if err != nil {
-		panic(err)
+		errorString = fmt.Sprintf("%v %v - failed to execute OPA HTTP request", http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+		return http.StatusInternalServerError, errorString, err
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError), err
+		errorString = fmt.Sprintf("%v %v - failed to read OPA response body", http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+		return http.StatusInternalServerError, errorString, err
 	}
 
 	opaResponse := &opaResponse{}
 	err = json.Unmarshal(body, opaResponse)
 	if err != nil {
-		return http.StatusInternalServerError, "(" + http.StatusText(http.StatusInternalServerError) + ") failed to unmarshal to OPA response struct", err
+		errorString = fmt.Sprintf("%v %v - failed to unmarshal to OPA response struct", http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
+		return http.StatusInternalServerError, errorString, err
 	}
 
 	if opaResponse.Result.Allow {
 		return http.StatusOK, http.StatusText(http.StatusOK), nil
 	}
 
-	return http.StatusForbidden, "(" + http.StatusText(http.StatusForbidden) + ") User not authorized.", nil
+	errorString = fmt.Sprintf("%v %v - User not authorized", http.StatusUnauthorized, http.StatusText(http.StatusUnauthorized))
+	return http.StatusUnauthorized, errorString, err
 }
 
 func (r *routes) ModifyResponse(resp *http.Response) error {
