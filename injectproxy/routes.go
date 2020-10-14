@@ -35,17 +35,17 @@ type routes struct {
 	label                string
 	mux                  *http.ServeMux
 	modifiers            map[string]func(*http.Response) error
-	opaHTTPAuthzEndpoint string
+	opaHTTPAllowEndpoint string
 }
 
-func NewRoutes(upstream *url.URL, label string, opaHTTPAuthzEndpoint string) *routes {
+func NewRoutes(upstream *url.URL, label string, opaHTTPAllowEndpoint string) *routes {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 
 	r := &routes{
 		upstream:             upstream,
 		handler:              proxy,
 		label:                label,
-		opaHTTPAuthzEndpoint: opaHTTPAuthzEndpoint,
+		opaHTTPAllowEndpoint: opaHTTPAllowEndpoint,
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/federate", enforceMethods(r.federate, "GET"))
@@ -68,18 +68,25 @@ func NewRoutes(upstream *url.URL, label string, opaHTTPAuthzEndpoint string) *ro
 func (r *routes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	queryString := req.URL.Query().Get("query")
 	f := func(c rune) bool {
-		return !unicode.IsLetter(c) && !unicode.IsNumber(c)
+		return !unicode.IsLetter(c) && !unicode.IsNumber(c) && c != '-' && c != '_'
 	}
 	querySlice := strings.FieldsFunc(queryString, f)
-	index := 0
+	if len(querySlice) == 0 {
+		http.Error(w, fmt.Sprint("Bad request. The 'query' parameter must be provided."), http.StatusBadRequest)
+		return
+	}
+	index := -1
 	for i := range querySlice {
 		if querySlice[i] == r.label {
 			index = i + 1
 			break
 		}
 	}
+	if index == -1 {
+		http.Error(w, fmt.Sprintf("Bad request. The %q query parameter must be provided.", r.label), http.StatusBadRequest)
+		return
+	}
 	lvalue := querySlice[index]
-	// lvalue := req.URL.Query().Get(r.label)
 	if lvalue == "" {
 		http.Error(w, fmt.Sprintf("Bad request. The %q query parameter must be provided.", r.label), http.StatusBadRequest)
 		return
@@ -111,9 +118,7 @@ type opaPayload struct {
 }
 
 type opaResponse struct {
-	Result struct {
-		Allow bool `json:"allow"`
-	} `json:"result"`
+	Result bool `json:"result"`
 }
 
 func (r *routes) isUserAuthorized(req *http.Request, val string) (int, string, error) {
@@ -124,7 +129,7 @@ func (r *routes) isUserAuthorized(req *http.Request, val string) (int, string, e
 	label := make(map[string]string)
 	label[r.label] = val
 	headers := make(map[string]string)
-	headers["authorization"] = "Bearer " + bearerToken
+	headers["authorization"] = bearerToken
 	opaPayload.Input.HTTP.Headers = headers
 	opaPayload.Input.Label = label
 
@@ -133,8 +138,8 @@ func (r *routes) isUserAuthorized(req *http.Request, val string) (int, string, e
 		errorString = fmt.Sprintf("%v %v - failed to marshal OPA payload", http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return http.StatusInternalServerError, errorString, err
 	}
-	opaHTTPAuthzEndpoint := r.opaHTTPAuthzEndpoint
-	opaReq, err := http.NewRequest("POST", opaHTTPAuthzEndpoint, bytes.NewBuffer(payload))
+	opaHTTPAllowEndpoint := r.opaHTTPAllowEndpoint
+	opaReq, err := http.NewRequest("POST", opaHTTPAllowEndpoint, bytes.NewBuffer(payload))
 	if err != nil {
 		errorString = fmt.Sprintf("%v %v - failed to create OPA HTTP request", http.StatusInternalServerError, http.StatusText(http.StatusInternalServerError))
 		return http.StatusInternalServerError, errorString, err
@@ -160,7 +165,7 @@ func (r *routes) isUserAuthorized(req *http.Request, val string) (int, string, e
 		return http.StatusInternalServerError, errorString, err
 	}
 
-	if opaResponse.Result.Allow {
+	if opaResponse.Result {
 		return http.StatusOK, http.StatusText(http.StatusOK), nil
 	}
 
