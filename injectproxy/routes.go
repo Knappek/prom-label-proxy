@@ -67,28 +67,9 @@ func NewRoutes(upstream *url.URL, label string, opaHTTPAllowEndpoint string) *ro
 
 func (r *routes) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	queryString := req.URL.Query().Get("query")
-	f := func(c rune) bool {
-		return !unicode.IsLetter(c) && !unicode.IsNumber(c) && c != '-' && c != '_'
-	}
-	querySlice := strings.FieldsFunc(queryString, f)
-	if len(querySlice) == 0 {
-		http.Error(w, fmt.Sprint("Bad request. The 'query' parameter must be provided."), http.StatusBadRequest)
-		return
-	}
-	index := -1
-	for i := range querySlice {
-		if querySlice[i] == r.label {
-			index = i + 1
-			break
-		}
-	}
-	if index == -1 {
-		http.Error(w, fmt.Sprintf("Bad request. The %q query parameter must be provided.", r.label), http.StatusBadRequest)
-		return
-	}
-	lvalue := querySlice[index]
-	if lvalue == "" {
-		http.Error(w, fmt.Sprintf("Bad request. The %q query parameter must be provided.", r.label), http.StatusBadRequest)
+	code, errorString, lvalue := r.findEnforcedValue(queryString)
+	if code != http.StatusOK {
+		http.Error(w, errorString, code)
 		return
 	}
 
@@ -115,6 +96,37 @@ type opaPayload struct {
 		} `json:"http"`
 		Label map[string]string `json:"label"`
 	} `json:"input"`
+}
+
+func (r *routes) findEnforcedValue(q string) (int, string, string) {
+	var errorString string
+
+	f := func(c rune) bool {
+		return !unicode.IsLetter(c) && !unicode.IsNumber(c) && c != '-' && c != '_'
+	}
+	querySlice := strings.FieldsFunc(q, f)
+
+	if len(querySlice) == 0 {
+		errorString = fmt.Sprintf("Bad request. The 'query' parameter must be provided.")
+		return http.StatusBadRequest, errorString, ""
+	}
+	index := -1
+	for i := range querySlice {
+		if querySlice[i] == r.label {
+			index = i + 1
+			break
+		}
+	}
+	if index == -1 {
+		errorString = fmt.Sprintf("Bad request. The %q query parameter must be provided.", r.label)
+		return http.StatusBadRequest, errorString, ""
+	}
+	lvalue := querySlice[index]
+	if lvalue == "" {
+		errorString = fmt.Sprintf("Bad request. The %q query parameter must be provided.", r.label)
+		return http.StatusBadRequest, errorString, ""
+	}
+	return http.StatusOK, "", lvalue
 }
 
 type opaResponse struct {
