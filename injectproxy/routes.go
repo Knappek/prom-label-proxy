@@ -121,6 +121,10 @@ func (r *routes) findEnforcedValue(q string) (int, string, string) {
 		errorString = fmt.Sprintf("Bad request. The %q query parameter must be provided.", r.label)
 		return http.StatusBadRequest, errorString, ""
 	}
+	if len(querySlice) == index {
+		errorString = fmt.Sprintf("Bad request. The %q query parameter value must not be empty.", r.label)
+		return http.StatusBadRequest, errorString, ""
+	}
 	lvalue := querySlice[index]
 	if lvalue == "" {
 		errorString = fmt.Sprintf("Bad request. The %q query parameter must be provided.", r.label)
